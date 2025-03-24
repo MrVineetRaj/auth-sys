@@ -2,7 +2,7 @@ import "dotenv/config.js";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import connectDB from "./utils/db.js"; // info : Don't forget to add .js it may cause some error
+
 
 // importing routes
 import userRoutes from "./routes/user.routes.js";
@@ -23,7 +23,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-connectDB();
 app.get("/", (req, res) => {
   res.json({
     message: "Hello my world 🌍",

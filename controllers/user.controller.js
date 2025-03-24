@@ -1,7 +1,7 @@
-import User from "../models/User.model.js";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { PrismaClient } from "@prisma/client";
 import sendVerificationMail from "../utils/sendMail.js";
 import verificationEmailTemplate from "../emails/verificatio.email.js";
 
@@ -10,63 +10,68 @@ const PORT = process.env.PORT;
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_NAME = process.env.TOKEN_NAME;
 
+const prisma = new PrismaClient();
 export const registerUser = async (req, res) => {
   // get name
-  const { name, email, password } = req.body;
+  const { name, email, password, phone } = req.body;
 
   // validate
-  if (!name || !email || !password) {
+  if (!name || !email || !password || !phone) {
     return res.status(400).json({
       message: "All fields are required",
       success: false,
     });
   }
+
   try {
     // check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await prisma.user.findFirst({
+      //info :
+      where: {
+        OR: [{ email: email }, { phone: phone }], // info : checking if either phone or email matches
+      },
+    });
 
     if (!!existingUser) {
       return res.status(400).json({
-        message: "User already exist",
-        success: false,
-      });
-    }
-
-    // create user in db
-    const newUser = await User.create({
-      name,
-      email,
-      password,
-    });
-
-    if (!!newUser === false) {
-      res.status(400).json({
-        message: "User not registered",
+        message: "User with same email or phone no already exist",
         success: false,
       });
     }
 
     // create a verification token
     const verificationToken = crypto.randomBytes(64).toString("hex");
-    const verificationTokenExpires = Date.now() + 10 * 60 * 1000;
+    const verificationTokenExpires = new Date(Date.now() + 10 * 60 * 1000);
 
-    // save token in DB
-    newUser.verificationToken = verificationToken;
-    newUser.verificationTokenExpires = verificationTokenExpires;
+    const url = `${BASE_URL}/api/v1/users/verify/${verificationToken}`;
 
-    await newUser.save();
+    const hashedPassword = bcrypt.hashSync(password, 10);
 
-    const url = `${BASE_URL}:${PORT}/api/v1/users/verify/${verificationToken}`;
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        phone,
+        verificationToken,
+        verificationTokenExpires,
+      },
+    });
+
+    if (!!newUser === false) {
+      return res.status(400).json({
+        message: "User not registered",
+        success: false,
+      });
+    }
 
     //  send token as email to user
-    const emailResp = await sendVerificationMail(
+    await sendVerificationMail(
       "unknownbug team",
       "Verification URL",
       verificationEmailTemplate(url),
       email
     );
-
-    console.log(emailResp);
 
     res.status(201).json({
       user: newUser,
@@ -79,61 +84,61 @@ export const registerUser = async (req, res) => {
   }
 };
 
-export const resendToken = async (req, res) => {
-  // get name
-  const { name, email, password } = req.body;
+// export const resendToken = async (req, res) => {
+//   // get name
+//   const { name, email, password } = req.body;
 
-  // validate
-  if (!name || !email || !password) {
-    return res.status(400).json({
-      message: "All fields are required",
-      success: false,
-    });
-  }
-  try {
-    const user = await User.findOne({ email });
+//   // validate
+//   if (!name || !email || !password) {
+//     return res.status(400).json({
+//       message: "All fields are required",
+//       success: false,
+//     });
+//   }
+//   try {
+//     const user = await User.findOne({ email });
 
-    if (!!user === false) {
-      res.status(404).json({
-        message: "User Not Found",
-        success: false,
-      });
-    }
+//     if (!!user === false) {
+//       res.status(404).json({
+//         message: "User Not Found",
+//         success: false,
+//       });
+//     }
 
-    // create a verification token
-    const verificationToken = crypto.randomBytes(64).toString("hex");
-    const verificationTokenExpires = Date.now() + 10 * 60 * 1000;
+//     // create a verification token
+//     const verificationToken = crypto.randomBytes(64).toString("hex");
+//     const verificationTokenExpires = Date.now() + 10 * 60 * 1000;
 
-    // save token in DB
-    user.verificationToken = verificationToken;
-    user.verificationTokenExpires = verificationTokenExpires;
+//     // save token in DB
+//     user.verificationToken = verificationToken;
+//     user.verificationTokenExpires = verificationTokenExpires;
 
-    await user.save();
+//     await user.save();
 
-    const url = `${BASE_URL}:${PORT}/api/v1/users/verify/${verificationToken}`;
+//     const url = `${BASE_URL}:${PORT}/api/v1/users/verify/${verificationToken}`;
 
-    //  send token as email to user
-    const emailResp = await sendVerificationMail(
-      "unknownbug team",
-      "Verification URL",
-      verificationEmailTemplate(url),
-      email
-    );
+//     //  send token as email to user
+//     const emailResp = await sendVerificationMail(
+//       "unknownbug team",
+//       "Verification URL",
+//       verificationEmailTemplate(url),
+//       email
+//     );
 
-    console.log(emailResp);
+//     console.log(emailResp);
 
-    res.status(200).json({
-      message: "Verification token sent",
-      success: true,
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
+//     res.status(200).json({
+//       message: "Verification token sent",
+//       success: true,
+//     });
+//   } catch (error) {
+//     console.log(error);
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
 
 export const verifyToken = async (req, res) => {
   const { verificationToken } = req.params;
@@ -145,8 +150,15 @@ export const verifyToken = async (req, res) => {
     });
   }
   try {
-    const user = await User.findOne({
-      verificationToken: verificationToken,
+    const currTime = new Date();
+
+    const user = await prisma.user.findFirst({
+      where: {
+        verificationToken: verificationToken,
+        verificationTokenExpires: {
+          gt: currTime, // info : checks if expiration time is greater than current time
+        },
+      },
     });
 
     if (!!user == false) {
@@ -156,21 +168,20 @@ export const verifyToken = async (req, res) => {
       });
     }
 
-    const timeDiff =
-      new Date(user?.verificationTokenExpires).getTime() - Date.now();
-
-    if (timeDiff <= 0) {
-      return res.status(400).send({
-        message: "Token Expired",
-        success: false,
-      });
-    }
-
     user.isVerified = true;
     user.verificationTokenExpires = "";
     user.verificationToken = "";
 
-    await user.save();
+    await prisma.user.update({
+      where: {
+        id: user.id,
+      },
+      data: {
+        isVerified: true,
+        verificationTokenExpires: null,
+        verificationToken: null,
+      },
+    });
     res.json({
       message: "Token Verified",
       success: true,
@@ -193,7 +204,7 @@ export const loginUser = async (req, res) => {
   }
 
   try {
-    const user = await User.findOne({ email: email }).select("+password");
+    const user = await prisma.user.findFirst({ where: { email: email } });
 
     if (!!!user) {
       return res.status(400).json({
@@ -211,21 +222,16 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, {
+    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
       expiresIn: "7d",
     });
-
-    user.sessionTokens.push({
-      sessionToken: token,
-    });
-
-    await user.save();
 
     const cookieOptions = {
       httpOnly: true,
       secure: true,
       maxAge: 7 * 24 * 60 * 1000,
     };
+    
     res.cookie(TOKEN_NAME, token, cookieOptions);
     res.send({
       message: "Logged In",
@@ -239,171 +245,169 @@ export const loginUser = async (req, res) => {
   }
 };
 
-export const getMe = async (req, res) => {
-  try {
-    const user = await User.findOne({
-      _id: req.user?.id,
-      "sessionTokens.sessionToken": req.token,
-    }).select(" -sessionTokens");
+// export const getMe = async (req, res) => {
+//   try {
+//     const user = await User.findOne({
+//       _id: req.user?.id,
+//       "sessionTokens.sessionToken": req.token,
+//     }).select(" -sessionTokens");
 
-    if (!!!user) {
-      res.status(200).json({ message: "Unauthorized Access", success: false });
-    }
-    res.status(200).json({
-      message: "Profile Fetched",
-      data: user,
-      success: true,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
+//     if (!!!user) {
+//       res.status(200).json({ message: "Unauthorized Access", success: false });
+//     }
+//     res.status(200).json({
+//       message: "Profile Fetched",
+//       data: user,
+//       success: true,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
 
-export const logOut = async (req, res) => {
-  try {
-    const user = await User.findOne({
-      _id: req.user.id,
-      "sessionTokens.sessionToken": req.token,
-    });
+// export const logOut = async (req, res) => {
+//   try {
+//     const user = await User.findOne({
+//       _id: req.user.id,
+//       "sessionTokens.sessionToken": req.token,
+//     });
 
-    user.sessionTokens = user.sessionTokens.filter((item) => {
-      return item.sessionTokens === req.token;
-    });
+//     user.sessionTokens = user.sessionTokens.filter((item) => {
+//       return item.sessionTokens === req.token;
+//     });
 
-    await user.save();
+//     await user.save();
 
-    const cookieOptions = {
-      httpOnly: true,
-      secure: true,
-      maxAge: 7 * 24 * 60 * 1000,
-    };
+//     const cookieOptions = {
+//       httpOnly: true,
+//       secure: true,
+//       maxAge: 7 * 24 * 60 * 1000,
+//     };
 
-    res.cookie(TOKEN_NAME, "", cookieOptions);
+//     res.cookie(TOKEN_NAME, "", cookieOptions);
 
-    res.status(200).json({
-      message: "Logged out successfully",
-      success: true,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
+//     res.status(200).json({
+//       message: "Logged out successfully",
+//       success: true,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
 
-export const logoutAll = async (req, res) => {
-  try {
-    const user = await User.findOne({
-      _id: req.user.id,
-      "sessionTokens.sessionToken": req.token,
-    });
+// export const logoutAll = async (req, res) => {
+//   try {
+//     const user = await User.findOne({
+//       _id: req.user.id,
+//       "sessionTokens.sessionToken": req.token,
+//     });
 
-    user.sessionTokens = [];
+//     user.sessionTokens = [];
 
-    await user.save();
+//     await user.save();
 
-    const cookieOptions = {
-      httpOnly: true,
-      secure: true,
-      maxAge: 7 * 24 * 60 * 1000,
-    };
+//     const cookieOptions = {
+//       httpOnly: true,
+//       secure: true,
+//       maxAge: 7 * 24 * 60 * 1000,
+//     };
 
-    res.cookie(TOKEN_NAME, "", cookieOptions);
+//     res.cookie(TOKEN_NAME, "", cookieOptions);
 
-    res.status(200).json({
-      message: "Logged out successfully",
-      success: true,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
+//     res.status(200).json({
+//       message: "Logged out successfully",
+//       success: true,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
 
-export const forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
+// export const forgotPassword = async (req, res) => {
+//   try {
+//     const { email } = req.body;
 
-    if (!email) {
-      return res.status(400).json({
-        message: "All fields are required",
-        success: false,
-      });
-    }
-    // create a verification token
-    const verificationToken = crypto.randomBytes(64).toString("hex");
-    const verificationTokenExpires = Date.now() + 10 * 60 * 1000;
+//     if (!email) {
+//       return res.status(400).json({
+//         message: "All fields are required",
+//         success: false,
+//       });
+//     }
+//     // create a verification token
+//     const verificationToken = crypto.randomBytes(64).toString("hex");
+//     const verificationTokenExpires = Date.now() + 10 * 60 * 1000;
 
-    const user = await User.findOne({ email });
+//     const user = await User.findOne({ email });
 
-    // save token in DB
-    user.verificationToken = verificationToken;
-    user.verificationTokenExpires = verificationTokenExpires;
+//     // save token in DB
+//     user.verificationToken = verificationToken;
+//     user.verificationTokenExpires = verificationTokenExpires;
 
-    await user.save();
+//     await user.save();
 
-    const url = `${BASE_URL}:${PORT}/api/v1/users/reset-password/${verificationToken}`;
+//     const url = `${BASE_URL}:${PORT}/api/v1/users/reset-password/${verificationToken}`;
 
-    //  send token as email to user
-    await sendVerificationMail(
-      "unknownbug team",
-      "Reset Password URL",
-      verificationEmailTemplate(url),
-      email
-    );
+//     //  send token as email to user
+//     await sendVerificationMail(
+//       "unknownbug team",
+//       "Reset Password URL",
+//       verificationEmailTemplate(url),
+//       email
+//     );
 
-    res.status(200).json({
-      message: "Rest password mail sent",
-      success: true,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
+//     res.status(200).json({
+//       message: "Rest password mail sent",
+//       success: true,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
 
-export const resetPassword = async (req, res) => {
-  try {
-    const { password } = req.body;
-    const { verificationToken } = req.params;
-    if (!password) {
-      return res.status(400).json({
-        message: "All fields are required",
-        success: false,
-      });
-    }
+// export const resetPassword = async (req, res) => {
+//   try {
+//     const { password } = req.body;
+//     const { verificationToken } = req.params;
+//     if (!password) {
+//       return res.status(400).json({
+//         message: "All fields are required",
+//         success: false,
+//       });
+//     }
 
-    const user = await User.findOne({
-      verificationToken,
-      verificationTokenExpires: { $gt: Date.now() },
-    });
+//     const user = await User.findOne({
+//       verificationToken,
+//       verificationTokenExpires: { $gt: Date.now() },
+//     });
 
-    user.password = password;
+//     user.password = password;
 
-    user.verificationToken = undefined; // info : jab undefined use karte h to db se hat jata so storage used descrease ho jata h
-    user.verificationTokenExpires = undefined;
-    await user.save();
+//     user.verificationToken = undefined; // info : jab undefined use karte h to db se hat jata so storage used descrease ho jata h
+//     user.verificationTokenExpires = undefined;
+//     await user.save();
 
-    // todo : send mail that password is changed
+//     // todo : send mail that password is changed
 
-    res.status(200).json({
-      message: "Password Changed",
-      success: true,
-    });
-  } catch (error) {
-    res.status(500).json({
-      message: error.message,
-      success: false,
-    });
-  }
-};
-
-
+//     res.status(200).json({
+//       message: "Password Changed",
+//       success: true,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       message: error.message,
+//       success: false,
+//     });
+//   }
+// };
